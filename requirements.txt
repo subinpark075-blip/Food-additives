@@ -5,3 +5,4 @@ requests>=2.32
 beautifulsoup4>=4.12
 rapidfuzz>=3.9
 google-generativeai>=0.6.0
+absl-py>=2.1.0
