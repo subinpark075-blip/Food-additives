@@ -15,8 +15,34 @@ if "last_results" not in st.session_state:
     st.session_state.last_results = None
 
 # ---- 페이지 설정 ----
-st.set_page_config(page_title="SEMIPRO – Streamlit", layout="wide")
-st.title("SEMIPRO – 첨가물 통합검색 (Streamlit)")
+st.set_page_config(page_title="SEMPIO Global Safety Research", layout="wide")
+
+# ---- 샘표 CI 헤더 ----
+import base64, io
+
+def _img_b64(path: str):
+    try:
+        with open(path, "rb") as f:
+            return base64.b64encode(f.read()).decode()
+    except Exception:
+        return None
+
+_logo64 = _img_b64("sempio_logo.png")
+st.markdown(
+    f"""
+    <div style="display:flex;align-items:center;margin:12px 0 12px 0;">
+      {f'<img src="data:image/png;base64,{_logo64}" style="width:54px;margin-right:14px;">' if _logo64 else ''}
+      <div style="line-height:1.25">
+        <h1 style="margin:0;font-weight:800;">SEMPIO Global Safety Research</h1>
+        <h3 style="margin:4px 0 0 0;color:gray;">Food Additives Database</h3>
+        <div style="margin:4px 0 0 0;color:#666;">국가별 식품첨가물 사용기준 검색</div>
+      </div>
+    </div>
+    """,
+    unsafe_allow_html=True
+)
+st.write("---")
+
 
 # ---- Gemini (선택) ----
 GEMINI_MODEL = None
