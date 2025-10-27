@@ -24,7 +24,7 @@ def extract_urls(text: str) -> List[str]:
     return url_re.findall(text)
 
 
-def read_excel_flexible(src: Union[str, bytes, bytearray, io.BytesIO, "UploadedFile", pd.DataFrame]) -> pd.DataFrame:
+def read_excel_flexible(src: Union[str, bytes, bytearray, io.BytesIO, pd.DataFrame]) -> pd.DataFrame:
     """
     Streamlit UploadedFile / 경로 / bytes / DataFrame 모두 허용.
     """

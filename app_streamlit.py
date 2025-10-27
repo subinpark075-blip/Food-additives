@@ -91,16 +91,59 @@ def search_records(kind: str, fileobj, query: str, algo_key: str, threshold: flo
     res = db.search(query, algo_key=algo_key, threshold=float(threshold))
     return db, res
 
+# ---- 용어 확장(업로드한 KR 파일 사용) ----
+def _expand_terms_korean(first_query: str, kr_file) -> list:
+    """KR DB에서 영문명·CAS를 찾아 검색어 확장 (Gemini 미사용 버전)."""
+    terms = [first_query]
+    if re.search(r"[가-힣]", first_query):  # 한글이면 KR DB에서 영문/캐스 찾아 확장
+        try:
+            kr_db = core.ChemicalDB("KR", kr_file)
+            kr_db.load()
+            extra_terms = kr_db.translate_korean_locally(first_query)  # core 쪽 유틸 가정
+            if extra_terms:
+                terms.extend(extra_terms)
+        except Exception as e:
+            print(f"⚠️ KR DB 확장 검색 실패: {e}")
+
+    # 중복 제거
+    out, seen = [], set()
+    for t in terms:
+        t2 = (t or "").strip()
+        if t2 and t2 not in seen:
+            out.append(t2); seen.add(t2)
+    return out
+
+
+# ---- 확장어 중 "최적" 1개 고르기 ----
+@st.cache_data(show_spinner=False)
+def _choose_best_term(expanded_terms: list, kr_file, algo_key: str, threshold: float) -> str:
+    """
+    각 확장어에 대해 KR만 빠르게 스코어링하여 최고점을 선택.
+    스코어 = (정확일치 수 * 2) + 유사일치 수
+    """
+    best_term, best_score = None, -1
+    for t in expanded_terms[:10]:  # 과도한 반복 방지
+        try:
+            _, res = search_records("KR", kr_file, t, algo_key, float(threshold))
+            score = (len(res.exact_rows) * 2) + len(res.similar_rows)
+            if score > best_score:
+                best_term, best_score = t, score
+        except Exception as e:
+            print(f"⚠️ term 스코어링 실패({t}): {e}")
+            continue
+    return best_term or (expanded_terms[0] if expanded_terms else "")
+
+
 # --- (이 부분 위에는 캐시 함수 등 있을 수 있음) ---
 
-def _expand_terms_korean(first_query: str) -> list:
+def _expand_terms_korean(first_query: str, kr_file) -> list:
     """KR DB에서 영문명·CAS를 찾아 검색어 확장 (Gemini 미사용 버전)."""
     terms = [first_query]
 
     # 한글 포함 시 KR DB에서 영문명·CAS 추출
     if re.search(r"[가-힣]", first_query):
         try:
-            kr_db = core.ChemicalDB("KR", df_kr)
+            kr_db = core.ChemicalDB("KR", kr_file)
             kr_db.load()
             extra_terms = kr_db.translate_korean_locally(first_query)
             if extra_terms:
@@ -116,32 +159,10 @@ def _expand_terms_korean(first_query: str) -> list:
             seen.add(t)
     return out
 
-
 # --- 검색 실행 ---
+# --- 검색 실행 (단일 블록만 유지) ---
 if go:
-    q = (query or "").strip()
-    if not q:
-        st.warning("검색어를 입력하세요.")
-        st.stop()
-
-    expanded_terms = _expand_terms_korean(q)
-
-    with st.spinner("검색 중..."):
-        res_map = _search_all(expanded_terms, algo, float(thr))
-
-    (db_kr, res_kr) = res_map["KR"]
-    (db_us, res_us) = res_map["US"]
-    (db_eu, res_eu) = res_map["EU"]
-
-    total_found = len(res_kr.exact_rows) + len(res_us.exact_rows) + len(res_eu.exact_rows)
-    st.success(f"🔎 검색 결과: {total_found}건이 검색되었습니다.")
-
-    st.session_state.last_results = ((db_kr, res_kr), (db_us, res_us), (db_eu, res_eu))
-
-
-# --- 검색 실행 ---
-if go:
-    # 1) 파일 확인 (필요하다면)
+    # 1) 파일 확인
     if not (kr_file and us_file and eu_file):
         st.warning("KR/US/EU 엑셀 파일을 모두 업로드해 주세요.")
         st.session_state.last_results = None
@@ -154,14 +175,21 @@ if go:
         st.session_state.last_results = None
         st.stop()
 
-    # 3) 실제 검색
-    with st.spinner("검색 중..."):
-        db_kr, res_kr = search_records("KR", kr_file, query_norm, algo, float(thr))
-        db_us, res_us = search_records("US", us_file, query_norm, algo, float(thr))
-        db_eu, res_eu = search_records("EU", eu_file, query_norm, algo, float(thr))
+    # 3) 용어 확장 + 최적 용어 선택
+    expanded = _expand_terms_korean(query_norm, kr_file)
+    best_term = _choose_best_term(expanded, kr_file, algo, float(thr))
+    with st.expander("확장된 검색어 보기", expanded=False):
+        st.write({"입력어": query_norm, "확장어 목록": expanded, "선택된 검색어": best_term})
 
-    # 4) 성공 시에만 저장
+    # 4) 실제 검색 (선택된 1개 용어로 통일 검색)
+    with st.spinner(f"‘{best_term}’로 KR/US/EU 검색 중..."):
+        db_kr, res_kr = search_records("KR", kr_file, best_term, algo, float(thr))
+        db_us, res_us = search_records("US", us_file, best_term, algo, float(thr))
+        db_eu, res_eu = search_records("EU", eu_file, best_term, algo, float(thr))
+
+    # 5) 세션 저장
     st.session_state.last_results = ((db_kr, res_kr), (db_us, res_us), (db_eu, res_eu))
+
 
 # --- 결과 보장 유틸: last_results 구조가 올바른지 검사 ---
 def _valid_results(obj) -> bool:
