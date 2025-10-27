@@ -42,20 +42,30 @@ st.markdown(
     unsafe_allow_html=True
 )
 st.write("---")
-
+# --- 본문 상단 검색창(스크린샷 위치) ---
+c1, c2, c3 = st.columns([5, 2, 1])
+with c1:
+    query = st.text_input("원료명 또는 영문명 입력", placeholder="예) 글리신 / glycine / 56-40-6")
+with c2:
+    st.write("&nbsp;")
+    go = st.button("검색", type="primary")
+with c3:
+    st.write("&nbsp;")
+    clear = st.button("지우기")
+if clear:
+    st.session_state.pop("last_results", None)
 
 # ---- Gemini (선택) ----
+GEMINI_API_KEY = "여기에_본인_Gemini_API_키"
 GEMINI_MODEL = None
 try:
     import google.generativeai as genai
-    API_KEY = (os.getenv("GOOGLE_API_KEY") or "").strip()
-    if API_KEY:
-        genai.configure(api_key=API_KEY)
+    if GEMINI_API_KEY.strip():
+        genai.configure(api_key=GEMINI_API_KEY.strip())
         GEMINI_MODEL = genai.GenerativeModel("gemini-2.5-flash")
-    else:
-        st.sidebar.info("환경변수 GOOGLE_API_KEY 설정 시 AI 요약/채팅 활성화")
 except Exception as e:
-    st.sidebar.warning(f"Gemini 불러오기 실패: {e}")
+    st.sidebar.warning(f"Gemini 로드 실패: {e}")
+
 
 # ---- 사이드바: 파일 업로더 + 검색 설정 ----
 with st.sidebar:
@@ -67,8 +77,6 @@ with st.sidebar:
     st.divider()
     algo = st.selectbox("유사도 알고리즘", ["token_set_ratio", "ratio", "partial_ratio"], index=0)
     thr  = st.slider("임계값", 50, 100, 85)
-    query = st.text_input("검색어 (한글명/영문명/CAS)")
-    go = st.button("검색")
 
 # 업로드 가드
 if not (kr_file and us_file and eu_file):
@@ -82,6 +90,54 @@ def search_records(kind: str, fileobj, query: str, algo_key: str, threshold: flo
     db.load()
     res = db.search(query, algo_key=algo_key, threshold=float(threshold))
     return db, res
+
+# --- (이 부분 위에는 캐시 함수 등 있을 수 있음) ---
+
+def _expand_terms_korean(first_query: str) -> list:
+    """KR DB에서 영문명·CAS를 찾아 검색어 확장 (Gemini 미사용 버전)."""
+    terms = [first_query]
+
+    # 한글 포함 시 KR DB에서 영문명·CAS 추출
+    if re.search(r"[가-힣]", first_query):
+        try:
+            kr_db = core.ChemicalDB("KR", df_kr)
+            kr_db.load()
+            extra_terms = kr_db.translate_korean_locally(first_query)
+            if extra_terms:
+                terms.extend(extra_terms)
+        except Exception as e:
+            print(f"⚠️ KR DB 확장 검색 실패: {e}")
+
+    # 중복 제거 및 정리
+    out, seen = [], set()
+    for t in terms:
+        if t and t not in seen:
+            out.append(t)
+            seen.add(t)
+    return out
+
+
+# --- 검색 실행 ---
+if go:
+    q = (query or "").strip()
+    if not q:
+        st.warning("검색어를 입력하세요.")
+        st.stop()
+
+    expanded_terms = _expand_terms_korean(q)
+
+    with st.spinner("검색 중..."):
+        res_map = _search_all(expanded_terms, algo, float(thr))
+
+    (db_kr, res_kr) = res_map["KR"]
+    (db_us, res_us) = res_map["US"]
+    (db_eu, res_eu) = res_map["EU"]
+
+    total_found = len(res_kr.exact_rows) + len(res_us.exact_rows) + len(res_eu.exact_rows)
+    st.success(f"🔎 검색 결과: {total_found}건이 검색되었습니다.")
+
+    st.session_state.last_results = ((db_kr, res_kr), (db_us, res_us), (db_eu, res_eu))
+
 
 # --- 검색 실행 ---
 if go:

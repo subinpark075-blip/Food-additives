@@ -194,6 +194,21 @@ class ChemicalDB:
         if len(similar_rows) > max_similar:
             similar_rows = similar_rows[:max_similar]
         return SearchResult(exact_rows=exact_rows, similar_rows=similar_rows)
+    def translate_korean_locally(self, korean_query: str) -> List[str]:
+        if not self.loaded or self.df is None or not self.korean_name_col:
+            return []
+        q = _normalize(korean_query).lower()
+        match = self.df[self.df[self.korean_name_col].str.lower() == q]
+        terms = set()
+        if not match.empty:
+            r = match.iloc[0]
+            if self.primary_name_col:
+                terms.add(_normalize(r.get(self.primary_name_col, "")))
+            if self.cas_col:
+                cas = _normalize(r.get(self.cas_col, ""))
+                m = CAS_PATTERN.search(cas)
+                if m: terms.add(m.group(0))
+        return [t for t in terms if t]
 
 
 def build_db(kind: str, src):
