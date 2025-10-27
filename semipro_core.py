@@ -24,23 +24,94 @@ def extract_urls(text: str) -> List[str]:
     return url_re.findall(text)
 
 
-def read_excel_flexible(src: Union[str, bytes, bytearray, io.BytesIO, pd.DataFrame]) -> pd.DataFrame:
+def read_excel_flexible(
+    src: Union[str, bytes, bytearray, io.BytesIO, pd.DataFrame, object]
+) -> pd.DataFrame:
     """
-    Streamlit UploadedFile / 경로 / bytes / DataFrame 모두 허용.
+    Streamlit UploadedFile / 파일경로(str) / bytes / BytesIO / DataFrame 모두 허용.
+    - 확장자/콘텐츠타입 기반으로 엔진 지정
+    - CSV 자동 처리
     """
+    import io, os
+    import pandas as pd
+
     if isinstance(src, pd.DataFrame):
         return src.copy()
     if src is None:
         raise ValueError("No source provided")
-    if hasattr(src, "read"):  # UploadedFile / file-like
-        data = src.read()
-        return pd.read_excel(io.BytesIO(data))
+
+    # UploadedFile 같은 객체 속성 추출
+    name = getattr(src, "name", None)
+    mime = getattr(src, "type", None)
+
+    # 바이트 확보 (getvalue 우선, 없으면 read)
+    data_bytes = None
     if isinstance(src, (bytes, bytearray)):
-        return pd.read_excel(io.BytesIO(src))
-    if isinstance(src, io.BytesIO):
-        return pd.read_excel(src)
-    # 경로(str)
-    return pd.read_excel(src)
+        data_bytes = bytes(src)
+    elif isinstance(src, io.BytesIO):
+        data_bytes = src.getvalue()
+    elif hasattr(src, "getvalue"):
+        try:
+            data_bytes = src.getvalue()
+        except Exception:
+            pass
+    if data_bytes is None and hasattr(src, "read"):
+        data_bytes = src.read()
+
+    def _as_buffer():
+        return io.BytesIO(data_bytes) if data_bytes is not None else src
+
+    # CSV 판단
+    def _is_csv(nm, mt):
+        nm = (nm or "").lower()
+        mt = (mt or "").lower()
+        return nm.endswith(".csv") or "text/csv" in mt or "application/csv" in mt
+
+    if _is_csv(name, mime):
+        return pd.read_csv(_as_buffer())
+
+    # 확장자로 엔진 선택
+    ext = (os.path.splitext(name)[1].lower() if name else "").strip()
+
+    def _read_with_engine(engine: str):
+        return pd.read_excel(_as_buffer(), engine=engine)
+
+    # 1) 확장자 기반 엔진 선택
+    if ext in (".xlsx", ".xlsm", ".xltx", ".xltm"):
+        try:
+            return _read_with_engine("openpyxl")
+        except Exception:
+            pass
+    elif ext == ".xls":
+        try:
+            return _read_with_engine("xlrd")
+        except Exception:
+            pass
+    elif ext == ".xlsb":
+        try:
+            return _read_with_engine("pyxlsb")
+        except Exception:
+            pass
+
+    # 2) 확장자 불명/실패 시 폴백
+    last_err = None
+    for eng in ("openpyxl", "xlrd", "pyxlsb"):
+        try:
+            return _read_with_engine(eng)
+        except Exception as e:
+            last_err = e
+            continue
+
+    # 3) 최종 폴백
+    try:
+        return pd.read_excel(_as_buffer())
+    except Exception as e:
+        raise ValueError(
+            "엑셀 파일을 읽지 못했습니다. 파일 포맷/엔진을 확인하세요. "
+            "권장 엔진: openpyxl(xlsx), xlrd==1.2.0(xls), pyxlsb(xlsb). "
+            f"마지막 오류: {last_err or e}"
+        )
+
 
 
 def find_col_fuzzy(df: "pd.DataFrame", names: List[str]) -> Optional[str]:
