@@ -1,8 +1,7 @@
-streamlit==1.33.0
-pandas>=2.2.0
-openpyxl>=3.1.2
-requests>=2.32
-beautifulsoup4>=4.12
-rapidfuzz>=3.9
-google-generativeai>=0.6.0
-absl-py>=2.1.0
+streamlit
+pandas
+openpyxl
+beautifulsoup4
+requests
+rapidfuzz
+google-generativeai

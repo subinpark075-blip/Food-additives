@@ -1,0 +1,11 @@
+services:
+  - type: web
+    name: sempio-additives-web
+    env: python
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: streamlit run app_streamlit.py --server.port $PORT --server.address 0.0.0.0
+    autoDeploy: true
+    envVars:
+      - key: GOOGLE_API_KEY
+        sync: false     # Render 대시보드에서 직접 입력할 환경변수
