@@ -56,7 +56,7 @@ if clear:
     st.session_state.pop("last_results", None)
 
 # ---- Gemini (선택) ----
-GEMINI_API_KEY = "여기에_본인_Gemini_API_키"
+GEMINI_API_KEY = "AIzaSyDpPvneo1OyY2a6DUZHgSOWdpcbt9rVx4g"
 GEMINI_MODEL = None
 try:
     import google.generativeai as genai
