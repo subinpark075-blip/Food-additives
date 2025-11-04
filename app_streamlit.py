@@ -36,17 +36,19 @@ _logo64 = _img_b64("sempio_logo.png")
 st.markdown("""
 <style>
 h1, h3 { margin: 0 !important; }
-.header-sub { margin-top: 6px; color: #666; }
+.header-sub { margin-top: 0; color: #666; font-size:18px; }
+[data-testid="stVerticalBlock"] div:has(> img) {
+    align-items: center !important;
+}
 </style>
 """, unsafe_allow_html=True)
 
 col_logo, col_title = st.columns([1, 8], vertical_alignment="center")
 with col_logo:
     if _logo64:
-        st.image(f"data:image/png;base64,{_logo64}", width=64)
+        st.image(f"data:image/png;base64,{_logo64}", width=120)
 with col_title:
-    st.markdown("## **SEM PIO Global Safety Research**")
-    st.markdown("### Food Additives Database")
+    st.markdown("## **Food Additives Database**", unsafe_allow_html=True)
     st.markdown('<div class="header-sub">국가별 식품첨가물 사용기준 검색</div>', unsafe_allow_html=True)
 
 st.divider()
@@ -67,12 +69,29 @@ def _on_clear():
     st.session_state.pop("last_cfr_combined", None)
     # st.experimental_rerun()  # 콜백은 자동 재실행되므로 보통 불필요
 
-c1, c2, c3 = st.columns([6, 2, 2], vertical_alignment="center")
+# --- 검색 입력/버튼 한 줄 정렬 (정렬 개선) ---
+st.markdown("""
+<style>
+div[data-testid="stHorizontalBlock"] {
+    align-items: center !important;
+}
+.stTextInput>div>div>input {
+    height: 44px !important;
+}
+.stButton>button {
+    height: 44px !important;
+    margin-top: 0 !important;
+}
+</style>
+""", unsafe_allow_html=True)
+
+c1, c2, c3 = st.columns([6, 1.5, 1.5], vertical_alignment="center")
 with c1:
     query = st.text_input(
         "원료명 또는 영문명 입력",
         key="query",
         placeholder="예) 글리신 / glycine / 56-40-6",
+        label_visibility="collapsed"  # ✅ 입력창 라벨 숨김
     )
 with c2:
     go = st.button("검색", type="primary", use_container_width=True)
@@ -120,7 +139,7 @@ if not (kr_file and us_file and eu_file):
 
 # ---- 검색 캐시 ----
 @st.cache_data(show_spinner=False)
-def search_records(kind: str, file_bytes: bytes, query: str, algo_key: str, threshold: float, version_tag: str):
+def search_records(kind: str, file_bytes: bytes, query: str, algo_key: str, threshold: float):
     key = f"{kind}_{hash(file_bytes)}_{algo_key}_{threshold}"
     bio = BytesIO(file_bytes)
     db = core.ChemicalDB(kind, bio)
