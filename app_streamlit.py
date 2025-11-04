@@ -7,29 +7,21 @@ import streamlit as st
 import pandas as pd
 import requests
 from bs4 import BeautifulSoup
+from io import BytesIO
 
 import semipro_core as core  # 위 코어 파일
 
 # --- session init ---
 if "last_results" not in st.session_state:
     st.session_state.last_results = None
+if "query" not in st.session_state:
+    st.session_state["query"] = ""   # ← 초기값만 세팅해두기
 
 # ---- 페이지 설정 ----
 st.set_page_config(page_title="SEMPIO Global Safety Research", layout="wide")
 
-# ---- 샘표 CI 헤더 + 입력행 ----
-import base64, io
-
-st.markdown(
-    """
-    <style>
-      /* 입력 라벨 간격/여백 최소화 */
-      .stTextInput label { margin-bottom: 4px !important; }
-      .stButton > button { height: 42px; }
-    </style>
-    """,
-    unsafe_allow_html=True
-)
+# ---- 샘표 CI 헤더 (CI와 타이틀 한 줄 정렬) ----
+import base64
 
 def _img_b64(path: str):
     try:
@@ -39,24 +31,43 @@ def _img_b64(path: str):
         return None
 
 _logo64 = _img_b64("sempio_logo.png")
-st.markdown(
-    f"""
-    <div style="display:flex;align-items:center;margin:12px 0 12px 0;">
-      {f'<img src="data:image/png;base64,{_logo64}" style="width:96px;margin-right:16px;border-radius:10px;">' if _logo64 else ''}
-      <div style="line-height:1.25">
-        <h1 style="margin:0;font-weight:800;">SEMPIO Global Safety Research</h1>
-        <h3 style="margin:4px 0 0 0;color:gray;">Food Additives Database</h3>
-        <div style="margin:4px 0 0 0;color:#666;">국가별 식품첨가물 사용기준 검색</div>
-      </div>
-    </div>
-    """,
-    unsafe_allow_html=True
-)
 
-st.write("---")
+# 여백/행간 최소화
+st.markdown("""
+<style>
+h1, h3 { margin: 0 !important; }
+.header-sub { margin-top: 6px; color: #666; }
+</style>
+""", unsafe_allow_html=True)
 
-# --- 본문 상단 검색행: 한 줄 정렬 ---
-c1, c2, c3 = st.columns([6, 2, 2])
+col_logo, col_title = st.columns([1, 8], vertical_alignment="center")
+with col_logo:
+    if _logo64:
+        st.image(f"data:image/png;base64,{_logo64}", width=64)
+with col_title:
+    st.markdown("## **SEM PIO Global Safety Research**")
+    st.markdown("### Food Additives Database")
+    st.markdown('<div class="header-sub">국가별 식품첨가물 사용기준 검색</div>', unsafe_allow_html=True)
+
+st.divider()
+
+
+# --- 검색 입력/버튼 한 줄 정렬 ---
+st.markdown("""
+<style>
+.stButton > button { height: 42px; }
+</style>
+""", unsafe_allow_html=True)
+
+# ⬇️ 지우기 콜백 (여기서만 상태를 바꾸세요)
+def _on_clear():
+    st.session_state["query"] = ""              # 입력창 비우기
+    st.session_state.pop("last_results", None)  # 결과 초기화
+    st.session_state.pop("us_chat_history", None)
+    st.session_state.pop("last_cfr_combined", None)
+    # st.experimental_rerun()  # 콜백은 자동 재실행되므로 보통 불필요
+
+c1, c2, c3 = st.columns([6, 2, 2], vertical_alignment="center")
 with c1:
     query = st.text_input(
         "원료명 또는 영문명 입력",
@@ -66,15 +77,7 @@ with c1:
 with c2:
     go = st.button("검색", type="primary", use_container_width=True)
 with c3:
-    clear = st.button("지우기", use_container_width=True)
-
-if clear:
-    # 입력값/결과/캐시 초기화
-    st.session_state.pop("last_results", None)
-    st.session_state["query"] = ""
-    st.session_state.pop("us_chat_history", None)
-    st.session_state.pop("last_cfr_combined", None)
-    st.experimental_rerun()
+    st.button("지우기", use_container_width=True, on_click=_on_clear)
 
 # ---- Gemini (선택) ----
 GEMINI_API_KEY = "AIzaSyDpPvneo1OyY2a6DUZHgSOWdpcbt9rVx4g"
@@ -99,6 +102,17 @@ with st.sidebar:
     algo = st.selectbox("유사도 알고리즘", ["token_set_ratio", "ratio", "partial_ratio"], index=0)
     thr  = st.slider("임계값", 50, 100, 85)
 
+def _rewind(f):
+    try:
+        f.seek(0)
+    except Exception:
+        pass
+    return f
+
+def _filebytes(uploaded):
+    _rewind(uploaded)
+    return uploaded.read()
+
 # 업로드 가드
 if not (kr_file and us_file and eu_file):
     st.warning("왼쪽에서 KR/US/EU 엑셀을 모두 업로드하면 검색이 시작됩니다.")
@@ -106,35 +120,23 @@ if not (kr_file and us_file and eu_file):
 
 # ---- 검색 캐시 ----
 @st.cache_data(show_spinner=False)
-def search_records(kind: str, fileobj, query: str, algo_key: str, threshold: float):
-    db = core.ChemicalDB(kind, fileobj)
+def search_records(kind: str, file_bytes: bytes, query: str, algo_key: str, threshold: float, version_tag: str):
+    key = f"{kind}_{hash(file_bytes)}_{algo_key}_{threshold}"
+    bio = BytesIO(file_bytes)
+    db = core.ChemicalDB(kind, bio)
     db.load()
     res = db.search(query, algo_key=algo_key, threshold=float(threshold))
     return db, res
 
-# ---- 확장어 중 "최적" 1개 고르기 (KR 스코어 기반) ----
-@st.cache_data(show_spinner=False)
-def _choose_best_term(expanded_terms: list, kr_file, algo_key: str, threshold: float) -> str:
-    best_term, best_score = None, -1
-    for t in expanded_terms[:10]:
-        try:
-            _, res = search_records("KR", kr_file, t, algo_key, float(thr))
-            score = (len(res.exact_rows) * 2) + len(res.similar_rows)
-            if score > best_score:
-                best_term, best_score = t, score
-        except Exception:
-            continue
-    return best_term or (expanded_terms[0] if expanded_terms else "")
-
 # ---- US/EU 폴백 검색: best_term로 안 뜨면 확장어 순차 재시도 ----
-def _search_with_fallback(kind: str, fileobj, terms: list, algo_key: str, threshold: float):
+def _search_with_fallback(kind: str, file_bytes: bytes, terms: list, algo_key: str, threshold: float):
     first_term = terms[0] if terms else ""
-    db, res = search_records(kind, fileobj, first_term, algo_key, float(threshold))
+    db, res = search_records(kind, file_bytes, first_term, algo_key, float(threshold))
     if res.exact_rows:
         return db, res
     # exact이 하나도 없으면 확장어로 순차 재시도
     for t in terms[1:10]:
-        _, r2 = search_records(kind, fileobj, t, algo_key, float(threshold))
+        _, r2 = search_records(kind, file_bytes, t, algo_key, float(threshold))
         if r2.exact_rows:
             return db, r2
         # exact이 없어도 similar이 훨씬 많으면 그걸 채택
@@ -144,7 +146,7 @@ def _search_with_fallback(kind: str, fileobj, terms: list, algo_key: str, thresh
 
 # ---- 확장어 중 "최적" 1개 고르기 ----
 @st.cache_data(show_spinner=False)
-def _choose_best_term(expanded_terms: list, kr_file, algo_key: str, threshold: float) -> str:
+def _choose_best_term(expanded_terms: list, kr_bytes: bytes, algo_key: str, threshold: float) -> str:
     """
     각 확장어에 대해 KR만 빠르게 스코어링하여 최고점을 선택.
     스코어 = (정확일치 수 * 2) + 유사일치 수
@@ -152,7 +154,7 @@ def _choose_best_term(expanded_terms: list, kr_file, algo_key: str, threshold: f
     best_term, best_score = None, -1
     for t in expanded_terms[:10]:  # 과도한 반복 방지
         try:
-            _, res = search_records("KR", kr_file, t, algo_key, float(threshold))
+            _, res = search_records("KR", kr_bytes, t, algo_key, float(threshold))
             score = (len(res.exact_rows) * 2) + len(res.similar_rows)
             if score > best_score:
                 best_term, best_score = t, score
@@ -164,14 +166,14 @@ def _choose_best_term(expanded_terms: list, kr_file, algo_key: str, threshold: f
 
 # --- (이 부분 위에는 캐시 함수 등 있을 수 있음) ---
 
-def _expand_terms_korean(first_query: str, kr_file) -> list:
+def _expand_terms_korean(first_query: str, kr_bytes: bytes) -> list:
     """KR DB에서 영문명·CAS를 찾아 검색어 확장 (Gemini 미사용 버전)."""
     terms = [first_query]
 
     # 한글 포함 시 KR DB에서 영문명·CAS 추출
     if re.search(r"[가-힣]", first_query):
         try:
-            kr_db = core.ChemicalDB("KR", kr_file)
+            kr_db = core.ChemicalDB("KR", BytesIO(kr_bytes))
             kr_db.load()
             extra_terms = kr_db.translate_korean_locally(first_query)
             if extra_terms:
@@ -200,19 +202,37 @@ if go:
         st.session_state.last_results = None
         st.stop()
 
+    kr_bytes = _filebytes(kr_file)
+    us_bytes = _filebytes(us_file)
+    eu_bytes = _filebytes(eu_file)
+
     # 1) 확장어 생성 + KR 기준 최적어 선택
-    expanded = _expand_terms_korean(query_norm, kr_file)
-    best_term = _choose_best_term(expanded, kr_file, algo, float(thr))
-    with st.expander("확장된 검색어 보기", expanded=False):
-        st.write({"입력어": query_norm, "확장어 목록": expanded, "선택된 검색어": best_term})
+    expanded = _expand_terms_korean(query_norm, kr_bytes)
+    best_term = _choose_best_term(expanded, kr_bytes, algo, float(thr))
 
     # 2) KR은 best_term로, US/EU는 exact 미발견 시 확장어 폴백
     with st.spinner(f"‘{best_term}’ 기준으로 KR/US/EU 검색 중..."):
-        db_kr, res_kr = search_records("KR", kr_file, best_term, algo, float(thr))
-        db_us, res_us = _search_with_fallback("US", us_file, [best_term] + expanded, algo, float(thr))
-        db_eu, res_eu = _search_with_fallback("EU", eu_file, [best_term] + expanded, algo, float(thr))
+        db_kr, res_kr = search_records("KR", kr_bytes, best_term, algo, float(thr))
+        db_us, res_us = _search_with_fallback("US", us_bytes, [best_term] + expanded, algo, float(thr))
+        db_eu, res_eu = _search_with_fallback("EU", eu_bytes, [best_term] + expanded, algo, float(thr))
 
     st.session_state.last_results = ((db_kr, res_kr), (db_us, res_us), (db_eu, res_eu))
+    # 상태 요약 배지
+    kr_cnt = len(res_kr.exact_rows)
+    us_cnt = len(res_us.exact_rows)
+
+    def _badge(label, ok):
+        color = "green" if ok else "red"
+        st.markdown(
+            f"<span style='background:{color};color:white;padding:2px 8px;border-radius:8px'>{label}</span>",
+            unsafe_allow_html=True
+        )
+
+    cols_badge = st.columns(3)
+    with cols_badge[0]: _badge(f"KR 정확일치 {kr_cnt}건", kr_cnt > 0)
+    with cols_badge[1]: _badge(f"US 정확일치 {us_cnt}건", us_cnt > 0)
+    with cols_badge[2]: _badge("EU 결과 확인", True)
+
 
 # --- 결과 보장 유틸: last_results 구조가 올바른지 검사 ---
 def _valid_results(obj) -> bool:
@@ -228,6 +248,9 @@ if not _valid_results(results):
     st.stop()
 
 (db_kr, res_kr), (db_us, res_us), (db_eu, res_eu) = results
+
+if len(res_kr.exact_rows) == 0 and len(res_kr.similar_rows) == 0:
+    st.info("검색 결과가 없습니다. 다른 이름 또는 CAS 번호로 시도해보세요.")
 
 def _first_exact_title(db, res, fallback: str = ""):
     if not res.exact_rows:
@@ -246,12 +269,12 @@ def _first_exact_title(db, res, fallback: str = ""):
 
 tabs = st.tabs(["대한민국(KR)", "미국(US)", "유럽(EU)"])
 
-def rows_to_df(db, rows):
-    cols = [c for c in db.columns_to_display if c]
+def rows_to_df(db, rows, all_cols=False):
+    cols = list(db.df.columns) if all_cols or not getattr(db, "columns_to_display", None) \
+           else [c for c in db.columns_to_display if c]
     data = []
     for r in rows:
-        row = [r.data.get(c, "") for c in cols]
-        data.append(row)
+        data.append([r.data.get(c, "") for c in cols])
     return pd.DataFrame(data, columns=[str(c) for c in cols])
 
 # =========================
@@ -259,9 +282,10 @@ def rows_to_df(db, rows):
 # =========================
 with tabs[0]:
     st.subheader(f"정확히 일치 – {_first_exact_title(db_kr, res_kr, '없음')}")
-    st.dataframe(rows_to_df(db_kr, res_kr.exact_rows), use_container_width=True)
+    show_all_kr = st.checkbox("모든 열 보기(많음)", value=True, key="kr_allcols")
+    st.dataframe(rows_to_df(db_kr, res_kr.exact_rows, all_cols=show_all_kr), use_container_width=True)
     st.subheader("유사 검색 결과")
-    st.dataframe(rows_to_df(db_kr, [r for _, r in res_kr.similar_rows]), use_container_width=True)
+    st.dataframe(rows_to_df(db_kr, [r for _, r in res_kr.similar_rows], all_cols=show_all_kr), use_container_width=True)
 
     st.divider()
     st.subheader("상세보기")
@@ -303,6 +327,18 @@ with tabs[0]:
             with st.spinner("답변 생성 중..."):
                 ans = GEMINI_MODEL.generate_content(f"{ctx}\n\n질문: {q_kr.strip()}").text
             st.write(ans)
+            with st.expander("행 전체 세부정보 펼치기 (모든 열)"):
+                def _render_row_details(row_dict: dict):
+                    html = ["<table class='kv-table' style='width:100%;border-collapse:collapse'>"]
+                    for k, v in row_dict.items():
+                        vv = str(v or "")
+                        html.append(
+                            f"<tr><td style='width:22%;vertical-align:top;padding:4px 8px;background:#f6f6f6'><b>{k}</b></td>"
+                            f"<td style='padding:4px 8px'>{vv}</td></tr>"
+                        )
+                    html.append("</table>")
+                    st.markdown("\n".join(html), unsafe_allow_html=True)
+                _render_row_details(target.data)
 
 # =========================
 # US 탭
@@ -310,6 +346,24 @@ with tabs[0]:
 def _is_cfr(u: str) -> bool:
     u = (u or "").lower()
     return ("ecfr.gov" in u) or ("govinfo.gov" in u) or ("law.cornell.edu/cfr" in u) or ("/cfr/" in u)
+
+def _fetch_with_fallback(url: str, timeout=7):
+    headers = {'User-Agent':'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome Safari'}
+    try:
+        r = requests.get(url, timeout=timeout, headers=headers)
+        if r.status_code == 200 and r.content:
+            return r.content.decode(errors="ignore")
+    except Exception:
+        pass
+    try:
+        proxy = f"https://r.jina.ai/http://{url.replace('https://','').replace('http://','')}"
+        r = requests.get(proxy, timeout=timeout, headers=headers)
+        if r.status_code == 200 and r.text:
+            return r.text
+    except Exception:
+        pass
+    return ""
+
 
 def _extract_cfr_text_fast(urls, timeout=5, max_workers=8, stop_after=5):
     headers = {'User-Agent':'Mozilla/5.0'}
@@ -319,9 +373,11 @@ def _extract_cfr_text_fast(urls, timeout=5, max_workers=8, stop_after=5):
 
     def fetch_one(u: str):
         try:
-            r = requests.get(u, timeout=timeout, headers=headers)
-            r.raise_for_status()
-            soup = BeautifulSoup(r.content, "html.parser")
+            raw = _fetch_with_fallback(u, timeout=timeout)
+            if not raw:
+                return f"[SOURCE] {u}\n(수집 실패: 차단/네트워크)", False
+            soup = BeautifulSoup(raw, "html.parser")
+
             for sel in ["nav","header","footer","script","style","aside"]:
                 for el in soup.select(sel):
                     el.decompose()
@@ -365,9 +421,10 @@ def gemini_summarize_cfr(combined_source: str) -> str:
 
 with tabs[1]:
     st.subheader(f"정확히 일치 – {_first_exact_title(db_us, res_us, '없음')}")
-    st.dataframe(rows_to_df(db_us, res_us.exact_rows), use_container_width=True)
+    show_all_us = st.checkbox("모든 열 보기(많음)", value=True, key="us_allcols")
+    st.dataframe(rows_to_df(db_us, res_us.exact_rows, all_cols=show_all_us), use_container_width=True)
     st.subheader("유사 검색 결과")
-    st.dataframe(rows_to_df(db_us, [r for _, r in res_us.similar_rows]), use_container_width=True)
+    st.dataframe(rows_to_df(db_us, [r for _, r in res_us.similar_rows], all_cols=show_all_us), use_container_width=True)
 
     st.divider()
     st.subheader("상세보기 + CFR 개별 요약")
@@ -420,12 +477,28 @@ with tabs[1]:
                     answer = "(Gemini 비활성)"
                 st.session_state["us_chat_history"].append({"q": q_us.strip(), "a": answer})
                 st.experimental_rerun()
+        with st.expander("행 전체 세부정보 펼치기 (모든 열)"):
+            st.markdown("**선택 행 전체 필드**")
+
+            def _render_row_details(row_dict: dict):
+                html = ["<table class='kv-table' style='width:100%;border-collapse:collapse'>"]
+                for k, v in row_dict.items():
+                    vv = str(v or "")
+                    html.append(
+                        f"<tr><td style='width:22%;vertical-align:top;padding:4px 8px;background:#f6f6f6'><b>{k}</b></td>"
+                        f"<td style='padding:4px 8px'>{vv}</td></tr>"
+                    )
+                html.append("</table>")
+                st.markdown("\n".join(html), unsafe_allow_html=True)
+
+            _render_row_details(tgt.data)
 
 # =========================
 # EU 탭
 # =========================
 with tabs[2]:
     st.subheader(f"정확히 일치 – {_first_exact_title(db_eu, res_eu, '없음')}")
+    show_all_eu = st.checkbox("모든 열 보기(많음)", value=True, key="eu_allcols")
 
     # 1) 이름만 리스트업
     name_col = db_eu.primary_name_col or "additive_name_en"
@@ -467,4 +540,21 @@ with tabs[2]:
 
         all_rows = _filter_rows_all_pages(db_eu, res_eu, target_name)
         st.subheader(f"상세보기 – {target_name} (총 {len(all_rows)} 페이지)")
-        st.dataframe(rows_to_df(db_eu, all_rows), use_container_width=True)
+        st.dataframe(rows_to_df(db_eu, all_rows, all_cols=show_all_eu), use_container_width=True)
+        # (1) EU 특수 열 요약 표
+        used_for_col = getattr(db_eu, "eu_used_for_col", None)
+        ml_notes_col = getattr(db_eu, "eu_ml_food_notes_col", None)
+
+        if all_rows:
+            row0 = all_rows[0].data
+            uf_val = str(row0.get(used_for_col, "") or "") if used_for_col else ""
+            ml_val = str(row0.get(ml_notes_col, "") or "") if ml_notes_col else ""
+
+            if used_for_col or ml_notes_col:
+                st.markdown("**Used For & ML / Food notes 요약 표**")
+                df_eu_special = pd.DataFrame(
+                    [{"구분": "Used For", "내용": uf_val},
+                    {"구분": "ML & Food notes", "내용": ml_val}]
+                )
+                st.dataframe(df_eu_special, use_container_width=True, height=140)
+

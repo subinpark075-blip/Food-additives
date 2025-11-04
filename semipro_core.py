@@ -173,6 +173,8 @@ class ChemicalDB:
         self.other_names_col = None
         self.korean_name_col = None
         self.loaded = False
+        self.eu_used_for_col = None
+        self.eu_ml_food_notes_col = None
 
     def load(self):
         df = read_excel_flexible(self.source)
@@ -200,6 +202,14 @@ class ChemicalDB:
             food_cat_col = find_col_fuzzy(df, ["food category", "food_category"])
             restr_col    = find_col_fuzzy(df, ["individual restriction(s) / exception(s)", "restrictions", "individual restrictions / exceptions"])
             foot_col     = find_col_fuzzy(df, ["footnotes", "footnote"])
+
+            self.eu_used_for_col = find_col_fuzzy(df, [
+                "used for", "used_for", "use for", "use(s) for", "uses", "usedfor"
+            ])
+            self.eu_ml_food_notes_col = find_col_fuzzy(df, [
+                "ml & food notes", "ml and food notes", "ml / food notes",
+                "ml_food_notes", "ml", "food notes", "ml/food notes"
+            ])
 
             self.cas_col          = cas_list_col
             self.primary_name_col = name_col
