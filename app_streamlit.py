@@ -85,18 +85,31 @@ div[data-testid="stHorizontalBlock"] {
 </style>
 """, unsafe_allow_html=True)
 
-with st.form(key="search_form", clear_on_submit=False):
-    c1, c2, c3 = st.columns([6, 2, 2], vertical_alignment="center")
-    with c1:
-        query = st.text_input(
-            "원료명 또는 영문명 입력",
-            key="query",
-            placeholder="예) 글리신 / glycine / 56-40-6",
-        )
-    with c2:
-        go = st.form_submit_button("검색", use_container_width=True, type="primary")
-    with c3:
-        st.form_submit_button("지우기", use_container_width=True, on_click=_on_clear)
+# --- 검색 입력/버튼 한 줄 정렬 (수정 버전) ---
+c1, c2, c3 = st.columns([6, 2, 2])
+with c1:
+    query = st.text_input(
+        "원료명 또는 영문명 입력",
+        key="query",
+        placeholder="예) 글리신 / glycine / 56-40-6",
+        label_visibility="visible",
+    )
+
+with c2:
+    go = st.button("검색", use_container_width=True, type="primary")
+
+        # ✅ 여기에 추가 — 검색 버튼 바로 아래!
+    if query and st.session_state.get("query") == query:
+        st.session_state["trigger_enter"] = True
+
+with c3:
+    st.button("지우기", use_container_width=True, on_click=_on_clear)
+
+# ✅ 추가 — Enter키로 검색하도록 보조 로직
+if st.session_state.get("trigger_enter", False) and not go:
+    go = True
+    st.session_state["trigger_enter"] = False  # 재입력 방지
+
 
 # ---- Gemini (선택) ----
 GEMINI_API_KEY = "AIzaSyDpPvneo1OyY2a6DUZHgSOWdpcbt9rVx4g"
@@ -337,8 +350,9 @@ with tabs[0]:
     st.subheader(f"정확히 일치 – {_first_exact_title(db_kr, res_kr, '없음')}")
 
         # ✅ 모든 열 보기 체크박스 제거
-    df_exact = rows_to_df(db_kr, res_kr.exact_rows, all_cols=False)
-    df_similar = rows_to_df(db_kr, [r for _, r in res_kr.similar_rows], all_cols=False)
+    df_exact = rows_to_df(db_kr, res_kr.exact_rows, all_cols=True)
+    df_similar = rows_to_df(db_kr, [r for _, r in res_kr.similar_rows], all_cols=True)
+
 
     st.markdown("**정확히 일치한 결과**")
     selected_row = st.data_editor(
@@ -363,10 +377,14 @@ with tabs[0]:
         st.divider()
         st.markdown("### 상세보기")
 
-        clicked_idx = selected_row["_selected_rows"]
-        if clicked_idx:
-            idx = list(clicked_idx.keys())[0]
-            row_data = res_kr.exact_rows[idx].data
+        # ✅ 안전하게 인덱스 추출 (신규 Streamlit 호환)
+        try:
+            clicked_idx = list(selected_row.index)[0]
+        except Exception:
+            clicked_idx = None
+
+        if clicked_idx is not None and clicked_idx < len(res_kr.exact_rows):
+            row_data = res_kr.exact_rows[clicked_idx].data
 
             html = ["<table style='width:100%;border-collapse:collapse;'>"]
             for k, v in row_data.items():
@@ -379,6 +397,7 @@ with tabs[0]:
                 )
             html.append("</table>")
             st.markdown("\n".join(html), unsafe_allow_html=True)
+
 
 # =========================
 # US 탭
@@ -461,10 +480,9 @@ def gemini_summarize_cfr(combined_source: str) -> str:
 
 with tabs[1]:
     st.subheader(f"정확히 일치 – {_first_exact_title(db_us, res_us, '없음')}")
-    show_all_us = st.checkbox("모든 열 보기(많음)", value=True, key="us_allcols")
-    st.dataframe(rows_to_df(db_us, res_us.exact_rows, all_cols=show_all_us), use_container_width=True)
+    st.dataframe(rows_to_df(db_us, res_us.exact_rows, all_cols=True))
     st.subheader("유사 검색 결과")
-    st.dataframe(rows_to_df(db_us, [r for _, r in res_us.similar_rows], all_cols=show_all_us), use_container_width=True)
+    st.dataframe(rows_to_df(db_us, [r for _, r in res_us.similar_rows], all_cols=True), use_container_width=True)
 
     st.divider()
     st.subheader("상세보기 + CFR 개별 요약")
@@ -542,7 +560,6 @@ with tabs[1]:
 # =========================
 with tabs[2]:
     st.subheader(f"정확히 일치 – {_first_exact_title(db_eu, res_eu, '없음')}")
-    show_all_eu = st.checkbox("모든 열 보기(많음)", value=True, key="eu_allcols")
 
     # 1) 이름만 리스트업
     name_col = db_eu.primary_name_col or "additive_name_en"
@@ -584,7 +601,7 @@ with tabs[2]:
 
         all_rows = _filter_rows_all_pages(db_eu, res_eu, target_name)
         st.subheader(f"상세보기 – {target_name} (총 {len(all_rows)} 페이지)")
-        st.dataframe(rows_to_df(db_eu, all_rows, all_cols=show_all_eu), use_container_width=True)
+        st.dataframe(rows_to_df(db_eu, all_rows, all_cols=True))
         # (1) EU 특수 열 요약 표
         used_for_col = getattr(db_eu, "eu_used_for_col", None)
         ml_notes_col = getattr(db_eu, "eu_ml_food_notes_col", None)
