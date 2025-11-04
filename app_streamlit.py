@@ -85,18 +85,18 @@ div[data-testid="stHorizontalBlock"] {
 </style>
 """, unsafe_allow_html=True)
 
-c1, c2, c3 = st.columns([6, 1.5, 1.5], vertical_alignment="center")
-with c1:
-    query = st.text_input(
-        "원료명 또는 영문명 입력",
-        key="query",
-        placeholder="예) 글리신 / glycine / 56-40-6",
-        label_visibility="collapsed"  # ✅ 입력창 라벨 숨김
-    )
-with c2:
-    go = st.button("검색", type="primary", use_container_width=True)
-with c3:
-    st.button("지우기", use_container_width=True, on_click=_on_clear)
+with st.form(key="search_form", clear_on_submit=False):
+    c1, c2, c3 = st.columns([6, 2, 2], vertical_alignment="center")
+    with c1:
+        query = st.text_input(
+            "원료명 또는 영문명 입력",
+            key="query",
+            placeholder="예) 글리신 / glycine / 56-40-6",
+        )
+    with c2:
+        go = st.form_submit_button("검색", use_container_width=True, type="primary")
+    with c3:
+        st.form_submit_button("지우기", use_container_width=True, on_click=_on_clear)
 
 # ---- Gemini (선택) ----
 GEMINI_API_KEY = "AIzaSyDpPvneo1OyY2a6DUZHgSOWdpcbt9rVx4g"
@@ -247,11 +247,45 @@ if go:
             unsafe_allow_html=True
         )
 
-    cols_badge = st.columns(3)
-    with cols_badge[0]: _badge(f"KR 정확일치 {kr_cnt}건", kr_cnt > 0)
-    with cols_badge[1]: _badge(f"US 정확일치 {us_cnt}건", us_cnt > 0)
-    with cols_badge[2]: _badge("EU 결과 확인", True)
+    # ---- 국가별 사용 가능/확인 필요 배지 표시 ----
 
+    cols_badge = st.columns(3)
+
+    def _status_badge(country: str, count: int):
+        """국가별 사용가능/확인필요 배지 표시"""
+        ok = count > 0
+        color = "#1b8300" if ok else "#b30000"  # 초록 / 빨강
+        text = f"{country} 사용가능 ({count}건)" if ok else f"{country} 사용 확인필요 ({count}건)"
+        st.markdown(
+            f"""
+            <div style='
+                background:{color};
+                color:white;
+                padding:8px 12px;
+                border-radius:10px;
+                text-align:center;
+                font-weight:bold;
+                font-size:15px;
+                box-shadow:0 1px 3px rgba(0,0,0,0.2);
+            '>
+                {text}
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+
+    # 정확일치 건수 계산
+    kr_cnt = len(res_kr.exact_rows)
+    us_cnt = len(res_us.exact_rows)
+    eu_cnt = len(res_eu.exact_rows)
+
+    # 3개 컬럼에 배치
+    with cols_badge[0]:
+        _status_badge("한국", kr_cnt)
+    with cols_badge[1]:
+        _status_badge("미국", us_cnt)
+    with cols_badge[2]:
+        _status_badge("유럽", eu_cnt)
 
 # --- 결과 보장 유틸: last_results 구조가 올바른지 검사 ---
 def _valid_results(obj) -> bool:
@@ -301,63 +335,50 @@ def rows_to_df(db, rows, all_cols=False):
 # =========================
 with tabs[0]:
     st.subheader(f"정확히 일치 – {_first_exact_title(db_kr, res_kr, '없음')}")
-    show_all_kr = st.checkbox("모든 열 보기(많음)", value=True, key="kr_allcols")
-    st.dataframe(rows_to_df(db_kr, res_kr.exact_rows, all_cols=show_all_kr), use_container_width=True)
-    st.subheader("유사 검색 결과")
-    st.dataframe(rows_to_df(db_kr, [r for _, r in res_kr.similar_rows], all_cols=show_all_kr), use_container_width=True)
 
-    st.divider()
-    st.subheader("상세보기")
-    target = res_kr.exact_rows[0] if res_kr.exact_rows else (res_kr.similar_rows[0][1] if res_kr.similar_rows else None)
-    if target:
-        row = target.data
+        # ✅ 모든 열 보기 체크박스 제거
+    df_exact = rows_to_df(db_kr, res_kr.exact_rows, all_cols=False)
+    df_similar = rows_to_df(db_kr, [r for _, r in res_kr.similar_rows], all_cols=False)
 
-        # 사용기준 원문 추출
-        usage_keys = ["사용기준","사용 기준","사용기준(국내기준)","사용기준(국내기준)_업데이트"]
-        usage = ""
-        for k in usage_keys:
-            if k in row:
-                usage = str(row.get(k, "") or ""); break
+    st.markdown("**정확히 일치한 결과**")
+    selected_row = st.data_editor(
+        df_exact,
+        hide_index=True,
+        use_container_width=True,
+        key="selected_exact_row",
+        disabled=True,
+    )
 
-        st.markdown("**사용기준 – AI 표 요약**")
-        if GEMINI_MODEL and usage.strip():
-            with st.spinner("AI가 표 형태로 정리 중..."):
-                prompt = (
-                    "다음 '사용기준' 한국어 원문을 표로 구조화해줘.\n"
-                    "- 컬럼은 가능하면 다음 순서로: 식품유형\t허용기준(수치)\t근거/조건\t비고\n"
-                    "- 수치는 mg/kg, mg/L, %, 또는 GMP/quantum satis 등 명확표기.\n"
-                    "- 반드시 TSV(탭 구분)만 출력.\n\n"
-                    f"{usage[:6000]}"
+    st.markdown("**유사 검색 결과**")
+    st.data_editor(
+        df_similar,
+        hide_index=True,
+        use_container_width=True,
+        key="selected_similar_row",
+        disabled=True,
+    )
+
+    # ✅ 클릭된 행의 상세정보 표시
+    if selected_row is not None and len(df_exact) > 0:
+        st.divider()
+        st.markdown("### 상세보기")
+
+        clicked_idx = selected_row["_selected_rows"]
+        if clicked_idx:
+            idx = list(clicked_idx.keys())[0]
+            row_data = res_kr.exact_rows[idx].data
+
+            html = ["<table style='width:100%;border-collapse:collapse;'>"]
+            for k, v in row_data.items():
+                vv = str(v or "")
+                html.append(
+                    f"<tr>"
+                    f"<td style='width:22%;padding:6px 8px;background:#f9f9f9;border:1px solid #ddd;'><b>{k}</b></td>"
+                    f"<td style='padding:6px 8px;border:1px solid #ddd;'>{vv}</td>"
+                    f"</tr>"
                 )
-                tsv = GEMINI_MODEL.generate_content(prompt).text.strip()
-
-            lines = [ln for ln in tsv.splitlines() if ln.strip()]
-            if len(lines) >= 2:
-                headers = [h.strip() for h in lines[0].split("\t")]
-                rows = [[c.strip() for c in ln.split("\t")] for ln in lines[1:]]
-                df_tsv = pd.DataFrame(rows, columns=headers)
-                st.dataframe(df_tsv, use_container_width=True, height=min(600, 120 + 24*max(4, len(rows))))
-        # else: 아무 표시도 하지 않음
-
-        st.markdown("**AI 질문**")
-        q_kr = st.text_input("질문 입력", key="kr_q")
-        if st.button("질문하기", key="kr_q_btn") and GEMINI_MODEL and q_kr.strip():
-            ctx = "다음 텍스트만 근거로 간단히 한국어로 답하세요.\n\n" + (usage or "")
-            with st.spinner("답변 생성 중..."):
-                ans = GEMINI_MODEL.generate_content(f"{ctx}\n\n질문: {q_kr.strip()}").text
-            st.write(ans)
-            with st.expander("행 전체 세부정보 펼치기 (모든 열)"):
-                def _render_row_details(row_dict: dict):
-                    html = ["<table class='kv-table' style='width:100%;border-collapse:collapse'>"]
-                    for k, v in row_dict.items():
-                        vv = str(v or "")
-                        html.append(
-                            f"<tr><td style='width:22%;vertical-align:top;padding:4px 8px;background:#f6f6f6'><b>{k}</b></td>"
-                            f"<td style='padding:4px 8px'>{vv}</td></tr>"
-                        )
-                    html.append("</table>")
-                    st.markdown("\n".join(html), unsafe_allow_html=True)
-                _render_row_details(target.data)
+            html.append("</table>")
+            st.markdown("\n".join(html), unsafe_allow_html=True)
 
 # =========================
 # US 탭
@@ -460,15 +481,19 @@ with tabs[1]:
 
         # URL별 개별 요약
         for i, u in enumerate(cfr_urls):
-            col_a, col_b = st.columns([6, 1])
-            with col_a:
+            cols = st.columns([3, 1, 6])  # ✅ 링크 왼쪽, 버튼 오른쪽, 결과 중앙
+            with cols[0]:
                 st.code(u, language="text")
-            with col_b:
+            with cols[1]:
                 if st.button("요약", key=f"us_sum_{i}"):
                     with st.spinner("원문 수집/요약 중..."):
                         combined = _extract_cfr_text_fast([u], timeout=5, max_workers=1, stop_after=1)
                         summary = gemini_summarize_cfr(combined) if combined else "(수집 실패)"
-                    st.text_area("요약 결과", summary, height=240, key=f"us_sum_out_{i}")
+                    st.session_state[f"us_sum_out_{i}"] = summary
+            with cols[2]:
+                if f"us_sum_out_{i}" in st.session_state:
+                    st.text_area("요약 결과", st.session_state[f"us_sum_out_{i}"], height=500, key=f"us_sum_display_{i}")
+
 
         # --- 미국 상세 Q&A (채팅 컨텍스트 보기 제거) ---
         st.markdown("### Gemini AI Q&A (미국 상세)")
@@ -495,7 +520,7 @@ with tabs[1]:
                 else:
                     answer = "(Gemini 비활성)"
                 st.session_state["us_chat_history"].append({"q": q_us.strip(), "a": answer})
-                st.experimental_rerun()
+                st.rerun()
         with st.expander("행 전체 세부정보 펼치기 (모든 열)"):
             st.markdown("**선택 행 전체 필드**")
 

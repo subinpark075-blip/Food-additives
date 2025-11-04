@@ -112,19 +112,32 @@ def read_excel_flexible(
             f"마지막 오류: {last_err or e}"
         )
 
-
-
 def find_col_fuzzy(df: "pd.DataFrame", names: List[str]) -> Optional[str]:
     low_map = {str(c).strip().lower(): c for c in df.columns}
+
+    # 1️⃣ 완전 일치 검사
     for n in names:
         key = str(n).strip().lower()
         if key in low_map:
             return low_map[key]
+
+    # 2️⃣ 부분 포함 검사
     for n in names:
         key = str(n).strip().lower()
         for k, orig in low_map.items():
             if key in k:
                 return orig
+
+    # 3️⃣ ✅ 추가 매칭: 공백/점/밑줄/괄호 무시 비교
+    for n in names:
+        key = str(n).strip().lower()
+        key_simplified = re.sub(r"[\s\._\-\(\)]", "", key)
+        for k, orig in low_map.items():
+            k_simplified = re.sub(r"[\s\._\-\(\)]", "", k)
+            if key_simplified in k_simplified:
+                return orig
+
+    # 4️⃣ 기본값
     return None
 
 
@@ -195,13 +208,22 @@ class ChemicalDB:
             self.columns_to_display = [c for c in wanted if c] or list(df.columns)
 
         elif self.kind == "EU":
-            e_col    = find_col_fuzzy(df, ["e_number", "e number", "e-number"])
-            name_col = find_col_fuzzy(df, ["additive_name_en", "additive name en", "name_en", "name en"])
-            syn_col  = find_col_fuzzy(df, ["synonyms"])
+            # E-number / Additive Name 매칭 범위 확장 (대소문자, 점, 괄호, 공백 대응)
+            e_col    = find_col_fuzzy(df, [
+                "e_number", "e number", "e-number", "e no", "e no.", "e_no"
+            ])
+            name_col = find_col_fuzzy(df, [
+                "additive_name_en", "additive name en", "name_en", "name en",
+                "additive name (english)", "additive name english", "additive name"
+            ])
+            syn_col  = find_col_fuzzy(df, ["synonyms", "synonym", "alias"])
             cas_list_col = find_col_fuzzy(df, ["cas_list", "cas list", "cas reg. no.", "cas no", "cas"])
             food_cat_col = find_col_fuzzy(df, ["food category", "food_category"])
-            restr_col    = find_col_fuzzy(df, ["individual restriction(s) / exception(s)", "restrictions", "individual restrictions / exceptions"])
-            foot_col     = find_col_fuzzy(df, ["footnotes", "footnote"])
+            restr_col    = find_col_fuzzy(df, [
+                "individual restriction(s) / exception(s)", "restrictions", "restriction(s)",
+                "individual restrictions / exceptions"
+            ])
+            foot_col     = find_col_fuzzy(df, ["footnotes", "footnote", "note", "remark"])
 
             self.eu_used_for_col = find_col_fuzzy(df, [
                 "used for", "used_for", "use for", "use(s) for", "uses", "usedfor"
