@@ -455,7 +455,7 @@ def gemini_summarize_cfr(combined_source: str) -> str:
         "4) 제한/예외, 5) 주의·비고. 수치가 명시된 문장만 우선합니다.\n"
         "- 동일/유사 규정은 병합하고, 상충 시 둘 다 표기하며 각 항목 끝에 (출처: URL) 붙이세요.\n"
         "- 결과는 표 형태 없이 불릿 리스트로 번호를 매겨 주세요.\n\n"
-        f"{combined_source[:120000]}"
+        f"{combined_source[:80000]}"
     )
     return GEMINI_MODEL.generate_content(prompt).text
 
